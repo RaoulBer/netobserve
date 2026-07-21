@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# dotnet-in-docker: run .NET 8 SDK commands against this workspace without a host install.
+# Source is bind-mounted; NuGet cache + CLI home live in .devhome/ (gitignored) so
+# restores are cached across runs and all generated files stay owned by the host user.
+#
+# NOTE: this host runs rootless Docker (container-root maps to the host user), so we
+# deliberately run as the container's default root — that is what makes generated
+# files land owned by the host user. Adding --user would break workspace writes.
+#
+# Usage:  scripts/dn <any dotnet args>
+#   scripts/dn --version
+#   scripts/dn build LagerMeister.sln
+#   scripts/dn test tests/LagerMeister.Inventory.Tests
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec docker run --rm \
+  -v "$ROOT":/src -w /src \
+  -e HOME=/src/.devhome \
+  -e NUGET_PACKAGES=/src/.devhome/nuget \
+  -e DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+  -e DOTNET_NOLOGO=1 \
+  mcr.microsoft.com/dotnet/sdk:8.0 \
+  dotnet "$@"

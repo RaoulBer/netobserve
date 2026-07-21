@@ -1,0 +1,93 @@
+# OpenTelemetry Collector — the single hub. One instrumentation in, N backends out.
+# Application code only ever speaks OTLP to this Collector; which backend the
+# telemetry lands in (Grafana LGTM here, Datadog/Azure Monitor as documented
+# fan-out points) is decided ONLY here, never in app code.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        # The browser posts OTLP/HTTP directly to the Collector, so its origin
+        # must be allowed by CORS.
+        cors:
+          allowed_origins:
+            - "http://localhost:8081"
+            - "http://127.0.0.1:8081"
+
+processors:
+  # memory_limiter must be first so it can shed load before batching.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  batch:
+    timeout: 2s
+    send_batch_size: 1024
+
+  # --- Tail sampling: the documented option (see docs/SAMPLING.md §3). ---
+  # Defined here as a real, reviewable policy but NOT wired into the active traces
+  # pipeline — the demo keeps 100% so every trace is visible. To enable it, swap the
+  # traces pipeline processors to: [memory_limiter, tail_sampling, batch].
+  tail_sampling:
+    decision_wait: 5s
+    num_traces: 50000
+    expected_new_traces_per_sec: 200
+    policies:
+      - name: keep-errors
+        type: status_code
+        status_code: { status_codes: [ERROR] }
+      - name: keep-slow
+        type: latency
+        latency: { threshold_ms: 1000 }
+      - name: baseline-probabilistic
+        type: probabilistic
+        probabilistic: { sampling_percentage: 5 }
+
+exporters:
+  # Traces -> Tempo (OTLP/gRPC)
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  # Logs -> Loki (native OTLP ingestion; exporter appends /v1/logs)
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+  # Metrics -> Prometheus scrape endpoint exposed by the Collector on :8889
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+  debug:
+    verbosity: normal
+
+  # --- Datadog fan-out (deferred; this build is OSS-only). To enable, set
+  #     DD_API_KEY and add `datadog` to the traces + logs exporter lists below.
+  # datadog:
+  #   api:
+  #     key: ${env:DD_API_KEY}
+  #     site: datadoghq.eu
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]   # add tail_sampling to activate sampling
+      exporters: [otlp/tempo]               # add datadog to fan out
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]            # add datadog to fan out
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+    logs:
+      level: info

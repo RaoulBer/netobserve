@@ -1,0 +1,9 @@
+# Keep the build context small and reproducible.
+.devhome/
+**/bin/
+**/obj/
+**/logs/
+**/*.log
+node_modules/
+.git/
+*.pdf

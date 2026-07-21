@@ -1,0 +1,32 @@
+# Dev-loop container home (NuGet cache, dotnet CLI state) — never committed
+.devhome/
+
+# .NET build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+
+# NLog file targets (runtime log output)
+logs/
+*.log
+
+# Node / frontend
+node_modules/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local env / secrets (Datadog keys etc. — never committed)
+.env
+*.local
+
+# Local PDFs — not part of the repo.
+*.pdf
+
+# Frontend build output (produced inside the Docker image)
+src/frontend/dist/
+src/frontend/package-lock.json

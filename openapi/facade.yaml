@@ -1,0 +1,123 @@
+openapi: 3.0.3
+info:
+  title: LagerMeister Public API
+  version: 1.0.0
+  description: >
+    The public API surface exposed by the YARP facade. This contract — not the
+    monolith's implementation — is the routing authority. `GET /api/items/{id}` is
+    strangled out to InventoryService; every other path is routed to the monolith.
+    Which service backs each path is invisible to the client by design.
+servers:
+  - url: http://localhost:8080
+    description: Facade (public entry point)
+
+paths:
+  /api/items:
+    get:
+      summary: List inventory items
+      operationId: listItems
+      x-lagermeister-routed-to: monolith
+      responses:
+        '200':
+          description: Inventory list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ItemSummary' }
+
+  /api/items/{id}:
+    get:
+      summary: Item detail with recent stock movements
+      operationId: getItemDetail
+      x-lagermeister-routed-to: inventory-service
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int32 }
+      responses:
+        '200':
+          description: Item detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ItemDetail' }
+        '404':
+          description: Item not found
+
+  /api/orders:
+    post:
+      summary: Place an order (validate → reserve stock → persist)
+      operationId: placeOrder
+      x-lagermeister-routed-to: monolith
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrderRequest' }
+      responses:
+        '201':
+          description: Order reserved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderCreated' }
+        '409':
+          description: Insufficient stock
+        '422':
+          description: Unknown SKU
+
+components:
+  schemas:
+    ItemSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        sku: { type: string }
+        name: { type: string }
+        quantityOnHand: { type: integer }
+        unitPrice: { type: number, format: double }
+
+    Movement:
+      type: object
+      properties:
+        delta: { type: integer }
+        occurredAt: { type: string, format: date-time }
+        location: { type: string }
+
+    ItemDetail:
+      type: object
+      properties:
+        id: { type: integer }
+        sku: { type: string }
+        name: { type: string }
+        quantityOnHand: { type: integer }
+        unitPrice: { type: number, format: double }
+        # lowStock is new in the InventoryService implementation — an additive,
+        # backward-compatible field the monolith never returned.
+        lowStock: { type: boolean }
+        movements:
+          type: array
+          items: { $ref: '#/components/schemas/Movement' }
+
+    OrderLineRequest:
+      type: object
+      required: [sku, quantity]
+      properties:
+        sku: { type: string }
+        quantity: { type: integer, minimum: 1 }
+
+    OrderRequest:
+      type: object
+      required: [customerRef, lines]
+      properties:
+        customerRef: { type: string }
+        lines:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/OrderLineRequest' }
+
+    OrderCreated:
+      type: object
+      properties:
+        orderId: { type: integer }
+        status: { type: string, example: RESERVED }

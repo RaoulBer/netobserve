@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LagerMeister.Monolith</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    Data access + logging (the legacy foundation):
+      - EF Core + Npgsql for direct DbContext data access (no read-model separation)
+      - NLog for file/console logging (the existing logging investment) plus the
+        ${activity} renderer that puts TraceId/SpanId in the layout.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.4" />
+    <PackageReference Include="NLog.Web.AspNetCore" Version="5.3.11" />
+    <!-- Provides the ${activity} layout renderer so NLog file/console targets can
+         render TraceId/SpanId from Activity.Current (NLog core has no such renderer). -->
+    <PackageReference Include="NLog.DiagnosticSource" Version="5.2.3" />
+  </ItemGroup>
+
+  <!-- OpenTelemetry: traces + metrics + logs, OTLP out. Exporter family pinned to
+       1.15.3 to clear NU1902 / GHSA-4625-4j76-fww9 (insecure default temp dir in the
+       OTLP disk-retry feature; fixed in 1.15.3). Instrumentation packages depend only
+       on the OTel API and unify upward to the 1.15.x API. -->
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.10.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.10.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.10.0" />
+    <PackageReference Include="Npgsql.OpenTelemetry" Version="8.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="nlog.config" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

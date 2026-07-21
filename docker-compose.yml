@@ -1,0 +1,160 @@
+# LagerMeister — single source of truth for the whole system.
+#
+#   Browser (OTel Web) ─────┐
+#                           ├─OTLP─► otel-collector ─► tempo   (traces)
+#   monolith ─OTLP──────────┘                      ├─► loki    (logs)
+#   (NLog bridge)                                  └─► prometheus (metrics)
+#                                                       ▲
+#                                              grafana ─┘ (LGTM UI, provisioned)
+#
+# One instrumentation, one Collector, N backends. Datadog is a documented fan-out
+# point in otel/collector-config.yaml (this build is OSS-only).
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: lagermeister
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d lagermeister"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    ports:
+      - "5432:5432"
+
+  monolith:
+    build:
+      context: .
+      dockerfile: src/LagerMeister.Monolith/Dockerfile
+    environment:
+      ConnectionStrings__Warehouse: "Host=postgres;Port=5432;Database=lagermeister;Username=postgres;Password=postgres"
+      ASPNETCORE_URLS: "http://+:8080"
+      # OTLP/gRPC to the Collector. App code knows only this endpoint.
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
+      OTEL_DEV_CONSOLE: "${OTEL_DEV_CONSOLE:-0}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    ports:
+      - "8082:8080"   # internal service; 8082 kept for direct debugging (facade owns 8080)
+
+  inventory:
+    # Extracted service (Strangler Fig). Serves GET /api/items/{id}, reads the same
+    # PostgreSQL tables through its own DDD model, OTel-native.
+    build:
+      context: .
+      dockerfile: src/LagerMeister.Inventory/Dockerfile
+    environment:
+      ConnectionStrings__Warehouse: "Host=postgres;Port=5432;Database=lagermeister;Username=postgres;Password=postgres"
+      ASPNETCORE_URLS: "http://+:8080"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    ports:
+      - "8083:8080"   # direct debugging
+
+  facade:
+    # YARP Strangler Fig facade — the PUBLIC entry point on :8080. Routes
+    # /api/items/{id} -> inventory, everything else -> monolith.
+    build:
+      context: .
+      dockerfile: facade/LagerMeister.Facade/Dockerfile
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
+      FRONTEND_ORIGINS: "http://localhost:8081,http://127.0.0.1:8081"
+    depends_on:
+      - monolith
+      - inventory
+      - otel-collector
+    ports:
+      - "8080:8080"
+
+  frontend:
+    # Vanilla HTML + fetch, instrumented with OpenTelemetry-Web as the trace root.
+    build:
+      context: ./src/frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - facade
+      - otel-collector
+    ports:
+      - "8081:80"
+
+  otel-collector:
+    # Rehosted on glibc — see otel/Dockerfile for why the upstream scratch image
+    # can't exec its own dynamically-linked binary in this environment.
+    build:
+      context: ./otel
+      dockerfile: Dockerfile
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP (browser posts here)
+      - "8889:8889"   # Prometheus exporter (scraped by Prometheus)
+    depends_on:
+      - tempo
+      - loki
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./grafana/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  loki:
+    image: grafana/loki:3.3.2
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./grafana/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./grafana/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_SECURITY_ADMIN_PASSWORD: "admin"
+      GF_FEATURE_TOGGLES_ENABLE: "traceqlEditor"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    ports:
+      - "3000:3000"
+
+volumes:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:

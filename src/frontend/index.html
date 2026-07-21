@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LagerMeister — inventory console</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.4rem; }
+    button { font-size: 0.95rem; padding: 0.5rem 0.9rem; margin: 0.25rem 0.4rem 0.25rem 0; cursor: pointer; }
+    pre { background: #f4f4f5; padding: 1rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+    .hint { color: #555; font-size: 0.85rem; }
+    code { background: #eee; padding: 0.1rem 0.3rem; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>LagerMeister — inventory console</h1>
+  <p class="hint">
+    Plain HTML + <code>fetch</code>. Each action starts a browser span; the
+    <code>traceparent</code> header propagates to the API, so one trace spans
+    <strong>browser → backend → PostgreSQL</strong>.
+  </p>
+
+  <div>
+    <button onclick="loadItems()">GET /api/items</button>
+    <button onclick="loadDetail(1)">GET /api/items/1 (N+1)</button>
+    <button onclick="placeOrder(false)">POST /api/orders (ok)</button>
+    <button onclick="placeOrder(true)">POST /api/orders (insufficient → error)</button>
+  </div>
+
+  <pre id="out">Ready. Click an action above.</pre>
+
+  <!-- Config for the OTel bundle; overridable without rebuilding. -->
+  <script>
+    window.OTEL_COLLECTOR_URL = 'http://localhost:4318/v1/traces';
+    window.API_BASE = 'http://localhost:8080';
+  </script>
+  <!-- Bundled OpenTelemetry-Web setup; defines window.LagerMeister. -->
+  <script src="./otel.js"></script>
+  <script>
+    const out = document.getElementById('out');
+    const show = (label, data) => { out.textContent = label + '\n' + JSON.stringify(data, null, 2); };
+    const base = () => window.LagerMeister.apiBase;
+
+    function loadItems() {
+      return window.LagerMeister.action('ui.load-items', async () => {
+        const r = await fetch(base() + '/api/items');
+        show('GET /api/items → ' + r.status, await r.json());
+      });
+    }
+    function loadDetail(id) {
+      return window.LagerMeister.action('ui.item-detail', async () => {
+        const r = await fetch(base() + '/api/items/' + id);
+        show('GET /api/items/' + id + ' → ' + r.status, await r.json());
+      });
+    }
+    function placeOrder(forceError) {
+      const body = forceError
+        ? { customerRef: 'WEB-ERR', lines: [{ sku: 'CRATE-XL', quantity: 9999 }] }
+        : { customerRef: 'WEB-OK', lines: [{ sku: 'WIDGET-001', quantity: 1 }] };
+      return window.LagerMeister.action('ui.place-order', async () => {
+        const r = await fetch(base() + '/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        show('POST /api/orders → ' + r.status, await r.json().catch(() => ({})));
+      });
+    }
+    // Auto-fire one action on load so a browser-rooted trace exists without a click.
+    window.addEventListener('load', () => setTimeout(loadDetail.bind(null, 1), 400));
+  </script>
+</body>
+</html>
